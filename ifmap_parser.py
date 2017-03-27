@@ -131,6 +131,7 @@ bool %(class)s::Decode(const xml_node &parent, std::string *id_name,
                     indent = ' ' * 16
                     if info.sequenceType == 'std::string':
                         file.write(indent + 'string var(item.child_value());\n')
+                        file.write(indent + 'boost::trim(var);\n')
                         file.write(indent + 'ptr->%s.push_back(var);\n' %
                                    info.membername)
                         file.write(indent + 'ptr->property_set_.set(%s);\n' %
@@ -197,9 +198,10 @@ class IFMapGenProperty(object):
 
         meta = self._meta
         fnname = '%s_ParseMetadata' % meta.getCppName()
-        file.write('bool %s(\n' % fnname)
-        file.write('        const pugi::xml_node &parent,\n')
-        file.write('        std::auto_ptr<AutogenProperty > *resultp) {\n')
+	decl = """
+bool %s(const pugi::xml_node &parent, std::auto_ptr<AutogenProperty > *resultp) {
+""" % fnname
+	file.write(decl)
 
 	if meta.getCType():
 	    file.write('    return autogen::%s::XmlParseProperty(parent, resultp);\n' %
@@ -207,15 +209,11 @@ class IFMapGenProperty(object):
 	else:
             indent = ' ' * 4
             info = meta.getMemberInfo()
-
-            cdecl = "    %s::%s *data =\n" % (getMetaParentName(meta),
-                                              SimpleTypeWrapper(info))
+            cdecl = """
+    %(class)s::%(wtype)s *data = new %(class)s::%(wtype)s();
+    resultp->reset(data);
+""" % {'class': getMetaParentName(meta), 'wtype': SimpleTypeWrapper(info)}
             file.write(cdecl)
-            cdecl = "        new %s::%s();\n" % (
-                getMetaParentName(meta), SimpleTypeWrapper(info))
-            file.write(cdecl)
-            file.write("    resultp->reset(data);\n");
-
             if info.ctypename == 'std::string':
                 file.write(indent + 'data->data = parent.child_value();\n')
             elif info.ctypename == 'int':
@@ -225,49 +223,8 @@ class IFMapGenProperty(object):
                 file.write(indent + 'data->data = parent.text().as_bool();\n');
             file.write(indent + 'return true;\n')
 
-        file.write('}\n\n')
+	file.write('}\n')
         DecoderDict[meta.getName()] = fnname
-
-    def GenerateJsonParser(self, JsonDecoderDict, file):
-        def getMetaParentName(meta):
-            if meta.getParent() == 'all':
-                return meta.getCppName() + 'Type'
-            return meta.getParent().getCppName()
-
-        meta = self._meta
-        fnname = '%s_ParseJsonMetadata' % meta.getCppName()
-        file.write('bool %s(\n' % fnname)
-        file.write('        const contrail_rapidjson::Value &parent,\n')
-        file.write('        std::auto_ptr<AutogenProperty > *resultp) {\n')
-
-        if meta.getCType():
-            file.write(
-                '    return autogen::%s::JsonParseProperty(parent, resultp);\n' %
-                meta.getCTypename())
-        else:
-            indent = ' ' * 4
-            info = meta.getMemberInfo()
-
-            cdecl = "    %s::%s *data =\n" % (
-                getMetaParentName(meta), SimpleTypeWrapper(info))
-            file.write(cdecl)
-            cdecl = "        new %s::%s();\n" % (
-                getMetaParentName(meta), SimpleTypeWrapper(info))
-            file.write(cdecl)
-            file.write("    resultp->reset(data);\n");
-            file.write("    // TODO: get default value from schema\n")
-            file.write("    if (parent.IsNull()) return true;\n")
-
-            if info.ctypename == 'std::string':
-                file.write(indent + 'if (!autogen::ParseString(parent, &data->data)) return false;\n')
-            elif info.ctypename == 'int':
-                file.write(indent + 'if (!autogen::ParseInteger(parent, &data->data)) return false;\n')
-            elif info.ctypename == 'bool':
-                file.write(indent + 'if (!autogen::ParseBoolean(parent, &data->data)) return false;\n')
-            file.write(indent + 'return true;\n')
-
-        file.write('}\n\n')
-        JsonDecoderDict[meta.getJsonName()] = fnname
 
 class IFMapGenLink(object):
     def __init__(self, meta):
@@ -276,10 +233,6 @@ class IFMapGenLink(object):
     def GenerateParser(self, DecoderDict, file):
         fnname = 'ParseLinkMetadata'
         DecoderDict[self._meta.getName()] = fnname
-
-    def GenerateJsonParser(self, JsonDecoderDict, file):
-        fnname = 'ParseJsonLinkMetadata'
-        JsonDecoderDict[self._meta.getJsonName()] = fnname
 
 class IFMapGenLinkAttr(object):
     def __init__(self, meta):
@@ -295,7 +248,8 @@ class IFMapGenLinkAttr(object):
         DecoderDict[self._meta.getName()] = fnname
 
         if not meta.getCType():
-            decl = """bool %s::ParseMetadata(const pugi::xml_node &parent,
+            decl = """
+bool %s::ParseMetadata(const pugi::xml_node &parent,
         std::auto_ptr<AutogenProperty> *resultp) {
     %sData *var = new %sData();
     resultp->reset(var);
@@ -305,32 +259,7 @@ class IFMapGenLinkAttr(object):
             if xtypename == 'std::string':
                 file.write('    var->data = parent.value();\n')
             file.write('    return true;\n')
-            file.write('}\n\n')
-
-    def GenerateJsonParser(self, JsonDecoderDict, file):
-        meta = self._meta
-        if meta.getCType():
-            fnname = '%s::JsonParseProperty' % meta.getCTypename()
-        else:
-            fnname = '%s::ParseJsonMetadata' % meta.getCppName()
-
-        JsonDecoderDict[self._meta.getJsonName()] = fnname
-
-        if not meta.getCType():
-            decl = """
-bool %s::ParseJsonMetadata(const contrail_rapidjson::Value &parent,
-        std::auto_ptr<AutogenProperty> *resultp) {
-    %sData *data = new %sData();
-    resultp->reset(data);
-""" % (meta.getCppName(), meta.getCppName(), meta.getCppName())
-            file.write(decl)
-            xtypename = meta.getCTypename()
-            if xtypename == 'std::string':
-                file.write('    std::string var;\n')
-                file.write('    if (!autogen::ParseString(parent, &var) return false;\n')
-                file.write('    data->data = var;\n')
-            file.write('    return true;\n')
-            file.write('}\n\n')
+            file.write('}\n')
 
     def GenerateEncoder(self, file):
         cdecl =  """
@@ -373,20 +302,93 @@ class IFMapParserGenerator(object):
     def __init__(self, cTypesDict):
         self._cTypesDict = cTypesDict
         self._DecoderDict = { }
-        self._JsonDecoderDict = { }
         self._TypeParserGenerator = TypeParserGenerator(None)
 
     def Generate(self, file, hdrname, IdDict, MetaDict):
         header = """
 #include "%s"
-#include "base/autogen_util.h"
-namespace autogen {
 
+#include <stdint.h>
+#include <sstream>
+#include <boost/algorithm/string/trim.hpp>
+#include <pugixml/pugixml.hpp>
+
+#include "ifmap/ifmap_agent_parser.h"
+#include "ifmap/ifmap_server_parser.h"
+#include "ifmap/ifmap_table.h"
+#include <linux/time.h>
+
+using namespace pugi;
+using namespace std;
+
+#include "base/compiler.h"
+#if defined(__GNUC__) && (__GCC_HAS_PRAGMA > 0)
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+
+namespace autogen {
+static bool ParseInteger(const pugi::xml_node &node, int *valuep) {
+    char *endp;
+    *valuep = strtoul(node.child_value(), &endp, 10);
+    while (isspace(*endp)) endp++;
+    return endp[0] == '\\0';
+}
+
+static bool ParseUnsignedLong(const pugi::xml_node &node, uint64_t *valuep) {
+    char *endp;
+    *valuep = strtoull(node.child_value(), &endp, 10);
+    while (isspace(*endp)) endp++;
+    return endp[0] == '\\0';
+}
+
+static bool ParseBoolean(const pugi::xml_node &node, bool *valuep) {
+    if (strcmp(node.child_value(), "true") ==0) 
+        *valuep = true;
+    else
+        *valuep = false;
+    return true;
+}
+static bool ParseDateTime(const pugi::xml_node &node, time_t *valuep) {
+    string value(node.child_value());
+    boost::trim(value);
+    struct tm tm;
+    memset(&tm, 0, sizeof(tm));
+    if (value.size() == 0) return true;
+    char *endp;
+    endp = strptime(value.c_str(), "%%FT%%T", &tm);
+    if (!endp) return false;
+    *valuep = timegm(&tm);
+    return true;
+}
+static bool ParseTime(const pugi::xml_node &node, time_t *valuep) {
+    string value(node.child_value());
+    boost::trim(value);
+    struct tm tm;
+    char *endp;
+    endp = strptime(value.c_str(), "%%T", &tm);
+    if (!endp) return false;
+    *valuep = timegm(&tm);
+    return true;
+}
+static std::string FormatDateTime(const time_t *valuep) {
+    struct tm tm;
+    char result[100];
+    gmtime_r(valuep, &tm);
+    strftime(result, sizeof(result), "%%FT%%T", &tm);
+    return std::string(result);
+}
+static std::string FormatTime(const time_t *valuep) {
+    struct tm tm;
+    char result[100];
+    gmtime_r(valuep, &tm);
+    strftime(result, sizeof(result), "%%T", &tm);
+    return std::string(result);
+}
 """ % hdrname
         file.write(header)
+
         for ctype in self._cTypesDict.values():
             self._TypeParserGenerator.GenerateTypeParser(file, ctype)
-            self._TypeParserGenerator.GenerateJsonTypeParser(file, ctype)
 
         for ident in IdDict.itervalues():
             if not ident._xelement:
@@ -431,48 +433,27 @@ namespace autogen {
                 genr = IFMapGenLinkAttr(meta)
             if genr:
                 genr.GenerateParser(self._DecoderDict, file)
-                genr.GenerateJsonParser(self._JsonDecoderDict, file)
 
-        parse_link_decl = """static bool ParseLinkMetadata(const xml_node &parent,
+        parse_link_decl = """
+static bool ParseLinkMetadata(const xml_node &parent,
     std::auto_ptr<AutogenProperty> *resultp) {
     return true;
 }
-
-static bool ParseJsonLinkMetadata(const contrail_rapidjson::Value &parent,
-    std::auto_ptr<AutogenProperty> *resultp) {
-    return true;
-}
-
 """
         if n_links > 0:
             file.write(parse_link_decl)
 
-        file.write('}  // namespace autogen\n\n')
-
+        file.write('}  // namespace autogen\n')
+        
         module_name = GetModuleName(file, '_server.cc')
         file.write('void %s_ParserInit(IFMapServerParser *xparser) {\n' %
                    module_name)
         indent = ' ' * 4
         for kvp in self._DecoderDict.iteritems():
-            fmt = 'xparser->MetadataRegister("%s",\n'
-            file.write(indent + fmt % kvp[0])
-            indent1 = ' ' * 8
-            fmt = '&autogen::%s);\n'
-            file.write(indent1 + fmt % kvp[1])
+            fmt = 'xparser->MetadataRegister("%s", &autogen::%s);\n'
+            file.write(indent + fmt % kvp)
         file.write('}\n')
 
-        file.write('\n')
-        module_name = GetModuleName(file, '_server.cc')
-        file.write('void %s_JsonParserInit(ConfigJsonParser *jparser) {\n' %
-                   module_name)
-        indent = ' ' * 4
-        for kvp in self._JsonDecoderDict.iteritems():
-            fmt = 'jparser->MetadataRegister("%s",\n'
-            file.write(indent + fmt % kvp[0])
-            indent1 = ' ' * 8
-            fmt = '&autogen::%s);\n'
-            file.write(indent1 + fmt % kvp[1])
-        file.write('}\n')
 
     def GenerateAgent(self, file, IdDict, MetaDict):
         cdecl = """
